@@ -122,10 +122,17 @@ fn run_update_flow(app: &tauri::AppHandle) {
         return;
     }
 
-    // Run the installer silently and exit so it can replace the running exe.
-    backend::log_line("running installer; exiting desktop");
-    let _ = std::process::Command::new(dest.as_os_str())
-        .args(["/S"])
+    // Schedule the installer to run after a short delay (lets the desktop fully
+    // exit so the installer can replace the running exe without a "close app"
+    // prompt), then exit. `CREATE_NO_WINDOW` avoids a console flash.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let dest_str = dest.to_string_lossy().into_owned();
+    let script = format!("timeout /t 2 /nobreak >nul && \"{dest_str}\" /S");
+    backend::log_line("scheduling installer run; exiting desktop");
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn();
     app.exit(0);
 }
