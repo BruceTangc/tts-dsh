@@ -21,15 +21,13 @@ Var DshCliShimAfter
 Var DshCliDetected
 
 !macro NSIS_HOOK_PREINSTALL
-  ; Warn (non-silent) when the global `dsh` CLI is not installed, since the
-  ; Desktop relies on `dsh web` to launch its backend. The installer never
+  ; Warn (non-silent) when `dsh` is not resolvable on PATH. SearchPathW uses
+  ; PATHEXT, so it finds `dsh.cmd`/`dsh.exe`/etc. regardless of how dsh was
+  ; installed (npm global, pnpm global, native binary, ...). The installer never
   ; installs the CLI itself — it only reminds the user.
-  SetShellVarContext current
   StrCpy $DshCliDetected "0"
-  ${If} ${FileExists} "$APPDATA\npm\dsh.cmd"
-    StrCpy $DshCliDetected "1"
-  ${EndIf}
-  ${If} ${FileExists} "$APPDATA\npm\dsh"
+  System::Call 'kernel32::SearchPathW(w, w "dsh", w, i 1024, t .r1, p 0) i .r0'
+  ${If} $0 > 0
     StrCpy $DshCliDetected "1"
   ${EndIf}
   ${If} $DshCliDetected == "0"
