@@ -6,7 +6,7 @@ mod platform;
 mod updates;
 
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -22,8 +22,18 @@ fn build_init_script(desktop_version: &str, runtime_version: &str) -> String {
     )
 }
 
+/// Restore and focus the main window (used by the tray "打开 DSH" action and a
+/// left-click on the tray icon). Never creates a second window or backend.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 /// Build the system tray icon with its menu, kept alive for the process lifetime.
-/// "打开 DSH" restores and focuses the existing window; "退出 DSH" actually exits.
+/// Left-click and "打开 DSH" restore the window; "退出 DSH" actually exits.
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 DSH", true, None::<&str>)?;
@@ -34,14 +44,22 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
+                backend::log_line("tray menu open; restoring window");
+                show_main_window(app);
             }
             "quit" => app.exit(0),
             _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                backend::log_line("tray left-click; restoring window");
+                show_main_window(tray.app_handle());
+            }
         });
 
     // Reuse the official DSH whale icon (the same one used by the window/exe).
@@ -91,8 +109,9 @@ fn main() {
         .setup(move |app| {
             // Create the main window with the desktop flag injected before any
             // page script, so the Web UI reliably detects Desktop and skips the
-            // browser entry page.
-            let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // browser entry page. The close (X) handler is registered on the
+            // builder so it reliably applies to this dynamically created window.
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("DSH")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
@@ -100,6 +119,17 @@ fn main() {
                 .center()
                 .initialization_script(&init_script)
                 .build()?;
+
+            // Close (X) → hide to tray. Registered on the window itself so it
+            // reliably applies to this dynamically created window.
+            let close_handle = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    backend::log_line("close requested; hiding to tray");
+                    api.prevent_close();
+                    let _ = close_handle.hide();
+                }
+            });
 
             setup_tray(app)?;
 
@@ -141,24 +171,6 @@ fn main() {
             });
 
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            match event {
-                // X button → hide to tray instead of exiting (tray "退出 DSH" exits).
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-                // Minimize button → hide to tray.
-                WindowEvent::Resized(size) => {
-                    if size.width == 0 && size.height == 0 {
-                        if window.is_minimized().unwrap_or(false) {
-                            let _ = window.hide();
-                        }
-                    }
-                }
-                _ => {}
-            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -680,6 +680,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "ureq",
+ "windows",
+ "winreg",
 ]
 
 [[package]]
