@@ -4,7 +4,6 @@
 mod backend;
 
 use tauri::Manager;
-use tauri::Webview;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 fn main() {
