@@ -16,6 +16,7 @@ fn main() {
             // config file next to the executable, and environment overrides —
             // never from the Web UI. See backend::BackendConfig::load.
             let config = backend::BackendConfig::load();
+            backend::log_line(&format!("desktop started; backend url {}", config.backend_url));
 
             // Run the detection/start/health state machine off the main thread so
             // the window renders its loading page immediately instead of freezing.
@@ -26,21 +27,24 @@ fn main() {
                         if let Some(window) = handle2.get_webview_window("main") {
                             match tauri::Url::parse(&url) {
                                 Ok(parsed) => {
-                                    if let Err(err) = window.navigate(parsed) {
-                                        eprintln!("dsh-desktop: navigate failed: {err}");
+                                    match window.navigate(parsed) {
+                                        Ok(()) => backend::log_line(&format!("navigated to {url}")),
+                                        Err(err) => backend::log_line(&format!("navigate failed: {err}")),
                                     }
                                 }
                                 Err(err) => {
-                                    eprintln!("dsh-desktop: invalid backend url {url}: {err}");
+                                    backend::log_line(&format!("invalid backend url {url}: {err}"));
                                 }
                             }
+                        } else {
+                            backend::log_line("window 'main' not found");
                         }
                     });
                 }
                 Err(message) => {
+                    backend::log_line(&format!("error: {message}"));
                     let handle2 = handle.clone();
                     let _ = handle.run_on_main_thread(move || {
-                        eprintln!("dsh-desktop: {message}");
                         handle2
                             .dialog()
                             .message(message)

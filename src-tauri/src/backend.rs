@@ -146,28 +146,43 @@ fn config_file_path() -> Option<PathBuf> {
     Some(dir.join(CONFIG_FILE_NAME))
 }
 
+/// Append a diagnostic line to `dsh-desktop.log` next to the executable and echo
+/// it to stderr. Best-effort: logging must never fail the app.
+pub fn log_line(msg: &str) {
+    eprintln!("dsh-desktop: {msg}");
+    let Ok(exe) = env::current_exe() else { return };
+    let Some(dir) = exe.parent() else { return };
+    let path = dir.join("dsh-desktop.log");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("{stamp} {msg}\n");
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 /// Run the startup state machine and return the ready Web UI URL.
 pub fn ensure_backend_ready(config: &BackendConfig) -> Result<String, String> {
-    eprintln!(
-        "dsh-desktop: checking for an existing backend at {}",
-        config.backend_url
-    );
+    log_line(&format!("checking for an existing backend at {}", config.backend_url));
     if probe(&config.backend_url) {
-        eprintln!("dsh-desktop: existing backend is ready; reusing it");
+        log_line("existing backend is ready; reusing it");
         return Ok(config.backend_url.clone());
     }
 
-    eprintln!(
-        "dsh-desktop: no backend detected; starting one ({} {:?})",
+    log_line(&format!(
+        "no backend detected; starting one ({} {:?})",
         config.start_command, config.start_args
-    );
+    ));
     let mut child = spawn_backend(config)?;
     let pid = child.id();
 
     let deadline = Instant::now() + Duration::from_secs(config.health_timeout_sec);
     loop {
         if probe(&config.backend_url) {
-            eprintln!("dsh-desktop: backend (pid {pid}) is ready");
+            log_line(&format!("backend (pid {pid}) is ready"));
             return Ok(config.backend_url.clone());
         }
         if Instant::now() >= deadline {
