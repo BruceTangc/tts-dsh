@@ -62,15 +62,30 @@ pub fn check_updates(current: &str) -> Result<UpdateInfo, String> {
     })
 }
 
+/// GET `url` with retry and backoff. GitHub/npm can be flaky (the connection
+/// is sometimes reset mid-TLS-handshake), so retry a few times before giving up.
+fn get_string(url: &str, accept: &str, attempts: u32) -> Result<String, String> {
+    let mut last_err = String::new();
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+        }
+        match ureq::get(url)
+            .set("User-Agent", "dsh-desktop")
+            .set("Accept", accept)
+            .timeout(Duration::from_secs(15))
+            .call()
+        {
+            Ok(resp) => return resp.into_string().map_err(|e| format!("read error: {e}")),
+            Err(e) => last_err = format!("network error: {e}"),
+        }
+    }
+    Err(last_err)
+}
+
 /// Fetch the latest release JSON from a GitHub Releases API endpoint.
 fn fetch_release(url: &str) -> Result<GitHubRelease, String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", "dsh-desktop")
-        .set("Accept", "application/vnd.github+json")
-        .timeout(Duration::from_secs(15))
-        .call()
-        .map_err(|e| format!("network error: {e}"))?;
-    let body = resp.into_string().map_err(|e| format!("read error: {e}"))?;
+    let body = get_string(url, "application/vnd.github+json", 4)?;
     serde_json::from_str(&body).map_err(|e| format!("parse error: {e}"))
 }
 
@@ -132,12 +147,7 @@ fn installed_dsh_version() -> Result<String, String> {
 
 /// Fetch the latest version from the npm registry `…/latest` endpoint.
 fn fetch_npm_latest(url: &str) -> Result<String, String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", "dsh-desktop")
-        .timeout(Duration::from_secs(15))
-        .call()
-        .map_err(|e| format!("network error: {e}"))?;
-    let body = resp.into_string().map_err(|e| format!("read error: {e}"))?;
+    let body = get_string(url, "application/json", 4)?;
     let latest: NpmLatest = serde_json::from_str(&body).map_err(|e| format!("parse error: {e}"))?;
     Ok(latest.version)
 }
