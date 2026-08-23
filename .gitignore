@@ -1,0 +1,13 @@
+# Node（任意层级）
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 本地临时/构建产物
+_build.log
+_*.nsi
+_tauri-*
