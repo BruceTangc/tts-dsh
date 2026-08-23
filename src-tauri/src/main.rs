@@ -8,7 +8,7 @@ mod updates;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 /// Build the initialization script injected before any page script runs. It
 /// carries the reliable Desktop-runtime flag (never User-Agent sniffing) plus the
@@ -47,12 +47,96 @@ fn webview2_args() -> String {
     }
 }
 
+/// Check for a newer Desktop release and, on user confirmation, download the
+/// installer and run it silently, then exit. Runs on a background thread; the
+/// dialogs use `blocking_show` (which must not run on the main thread).
+fn run_update_flow(app: &tauri::AppHandle) {
+    let current = env!("CARGO_PKG_VERSION");
+
+    let info = match updates::check_updates(current) {
+        Ok(info) => info,
+        Err(err) => {
+            backend::log_line(&format!("update check failed: {err}"));
+            let _ = app
+                .dialog()
+                .message(format!("检查更新失败：{err}"))
+                .title("DSH Desktop")
+                .kind(MessageDialogKind::Error)
+                .blocking_show();
+            return;
+        }
+    };
+
+    if !info.update_available {
+        backend::log_line(&format!("already up to date ({})", info.current));
+        let _ = app
+            .dialog()
+            .message(format!("当前已是最新版本（{}）", info.current))
+            .title("DSH Desktop 更新")
+            .blocking_show();
+        return;
+    }
+
+    let Some(url) = info.download_url.clone() else {
+        backend::log_line("update available but no installer asset");
+        let _ = app
+            .dialog()
+            .message(format!(
+                "发现新版本 {}，但 release 里没有找到安装包（.exe）。",
+                info.latest
+            ))
+            .title("DSH Desktop 更新")
+            .kind(MessageDialogKind::Error)
+            .blocking_show();
+        return;
+    };
+
+    let confirmed = app
+        .dialog()
+        .message(format!(
+            "发现新版本 {}（当前 {}），是否下载并更新？",
+            info.latest, info.current
+        ))
+        .title("DSH Desktop 更新")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "更新".into(),
+            "取消".into(),
+        ))
+        .blocking_show();
+
+    if !confirmed {
+        backend::log_line("update cancelled by user");
+        return;
+    }
+
+    let dest = std::env::temp_dir().join("dsh-desktop-update.exe");
+    backend::log_line(&format!("downloading update from {url}"));
+    if let Err(err) = updates::download_installer(&url, &dest) {
+        backend::log_line(&format!("download failed: {err}"));
+        let _ = app
+            .dialog()
+            .message(format!("下载更新失败：{err}"))
+            .title("DSH Desktop")
+            .kind(MessageDialogKind::Error)
+            .blocking_show();
+        return;
+    }
+
+    // Run the installer silently and exit so it can replace the running exe.
+    backend::log_line("running installer; exiting desktop");
+    let _ = std::process::Command::new(dest.as_os_str())
+        .args(["/S"])
+        .spawn();
+    app.exit(0);
+}
+
 /// Build the system tray icon with its menu, kept alive for the process lifetime.
 /// Left-click and "打开 DSH" restore the window; "退出 DSH" actually exits.
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
+    let check_update = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 DSH", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &check_update, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -61,6 +145,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             "open" => {
                 backend::log_line("tray menu open; restoring window");
                 show_main_window(app);
+            }
+            "check_update" => {
+                backend::log_line("check update requested");
+                let handle = app.clone();
+                std::thread::spawn(move || run_update_flow(&handle));
             }
             "quit" => app.exit(0),
             _ => {}
