@@ -239,7 +239,9 @@ fn probe(url: &str) -> bool {
 /// Resolve the backend launch command and arguments.
 ///
 /// Production (`repo_path == None`) launches the official `dsh` command with the
-/// fixed args (`dsh web --no-open`). Dev (`repo_path == Some(repo)`) runs
+/// fixed args (`dsh web --no-open`). Because `dsh` is an npm `.cmd` shim (not a
+/// `.exe`), `CreateProcess` cannot resolve it directly, so it is run through
+/// `cmd /C`. Dev (`repo_path == Some(repo)`) runs
 /// `node <repo>/apps/cli/lib/bin.js` with the same args, failing fast with a
 /// clear error when that script does not exist.
 fn launch_command(config: &BackendConfig) -> Result<(String, Vec<String>), String> {
@@ -256,7 +258,12 @@ fn launch_command(config: &BackendConfig) -> Result<(String, Vec<String>), Strin
             args.extend(config.start_args.iter().cloned());
             Ok(("node".to_string(), args))
         }
-        None => Ok((config.start_command.clone(), config.start_args.clone())),
+        None => {
+            // `cmd /C <command> <args...>` so cmd resolves the `.cmd` shim.
+            let mut args = vec!["/C".to_string(), config.start_command.clone()];
+            args.extend(config.start_args.iter().cloned());
+            Ok(("cmd".to_string(), args))
+        }
     }
 }
 
@@ -274,11 +281,17 @@ fn describe_start(config: &BackendConfig) -> String {
 
 /// Spawn the backend with the fixed, whitelisted command. Stdio is nulled so the
 /// child survives a desktop exit without inheriting a broken pipe, and the
-/// desktop intentionally never reaps it (V1: keep running on exit).
+/// desktop intentionally never reaps it (V1: keep running on exit). The
+/// `CREATE_NO_WINDOW` flag prevents a console window from flashing when the
+/// `cmd`/`node` backend process is a console application.
 fn spawn_backend(config: &BackendConfig) -> Result<Child, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
     let (program, args) = launch_command(config)?;
     Command::new(&program)
         .args(&args)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

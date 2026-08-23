@@ -18,6 +18,26 @@
 
 Var DshCliShimPresent
 Var DshCliShimAfter
+Var DshCliDetected
+
+!macro NSIS_HOOK_PREINSTALL
+  ; Warn (non-silent) when the global `dsh` CLI is not installed, since the
+  ; Desktop relies on `dsh web` to launch its backend. The installer never
+  ; installs the CLI itself — it only reminds the user.
+  SetShellVarContext current
+  StrCpy $DshCliDetected "0"
+  ${If} ${FileExists} "$APPDATA\npm\dsh.cmd"
+    StrCpy $DshCliDetected "1"
+  ${EndIf}
+  ${If} ${FileExists} "$APPDATA\npm\dsh"
+    StrCpy $DshCliDetected "1"
+  ${EndIf}
+  ${If} $DshCliDetected == "0"
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "未检测到 dsh 命令。DSH Desktop 依赖 dsh 后端才能启动 Web UI。$\r$\n请先安装：npm install -g @deepseek-ai/dsh"
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   ; Snapshot whether the global `dsh` CLI shim exists before we delete anything.
