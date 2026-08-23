@@ -44,7 +44,7 @@ STARTING
 ```
 
 - **第一优先级**：复用已存在的 Backend。
-- 只有确认 Backend 不存在，才启动一个 Backend（`node <checkout>/apps/cli/lib/bin.js web --no-open`）。
+- 只有确认 Backend 不存在，才启动一个 Backend（`node $DSH_REPO_PATH\apps\cli\lib\bin.js web --no-open`）。
 - 检测是**真实健康检查**（HTTP 200 + `__DSH_BOOT__`），不是猜端口、不是 `sleep 5`。
 - 超时（默认 60s）后给出明确错误，不无限等待。
 
@@ -61,7 +61,7 @@ Desktop 永不 kill 用户已有的 Backend。
 
 - 不向 Web UI 暴露任何 Tauri IPC：`capabilities/default.json` 权限为**空**。
 - Backend 启动完全在 Rust 内部完成，Web UI 无法触发、无法传参。
-- 启动命令**固定/白名单化**：只允许 `node <固定路径> web --no-open`，参数来自配置文件 / 环境变量 / 内置默认值，绝不来自运行时输入。
+- 启动命令**固定/白名单化**：只允许 `node <DSH_REPO_PATH>\apps\cli\lib\bin.js web --no-open`，路径与参数来自配置文件 / 环境变量 / 内置默认值，绝不来自运行时输入。
 - 远程 DSH Web UI 通过 HTTP/WebSocket 直连 Backend，与浏览器行为一致，不经 Tauri 桥。
 
 ## 5. 目录结构
@@ -134,20 +134,23 @@ cargo build --release
 >
 > `rust-toolchain.toml` 固定了 Rust `stable` + `x86_64-pc-windows-msvc` 目标，`rustup` 会自动采用。
 
-> 图标：仓库已含 `src-tauri/icons/`；如需重新生成可运行 `scripts/generate-icons.ps1`，或用 `pnpm icons <图片>`。
+> 图标：`src-tauri/icons/` 已含从官方 DSH `favicon.svg`（鲸鱼 Logo）生成的多尺寸 PNG + ICO；如需重新生成：`npx tauri icon app-icon.svg`。
 
 ## 8. 配置（可选）
 
-Backend 地址 / 启动命令默认已写死为当前 checkout。可通过环境变量覆盖（**优先级最高**）：
+Backend 地址 / Runtime 路径默认已内置。可通过环境变量覆盖（**优先级最高**）：
 
 | 环境变量 | 说明 |
 |---|---|
 | `DSH_BACKEND_URL` | 例如 `http://127.0.0.1:8080/` |
+| `DSH_REPO_PATH` | DeepSeek Harness 仓库根目录，默认 `D:\DSH\deepseek-harness`；启动脚本取 `$DSH_REPO_PATH\apps\cli\lib\bin.js` |
 | `DSH_BACKEND_START_COMMAND` | 默认 `node` |
-| `DSH_BACKEND_START_ARGS` | JSON 数组，默认 `["…\\lib\\bin.js","web","--no-open"]` |
+| `DSH_BACKEND_START_ARGS` | JSON 数组，`bin.js` 之后的固定参数，默认 `["web","--no-open"]` |
 | `DSH_BACKEND_HEALTH_TIMEOUT_SEC` | 默认 `60` |
 
 或把 `dsh-desktop.conf.example.json` 复制为 `dsh-desktop.conf.json` 放到 exe 同级目录（或用 `DSH_DESKTOP_CONFIG` 指定路径）。优先级：环境变量 > 配置文件 > 内置默认。
+
+**日志**：写入 `%LOCALAPPDATA%\DSH\logs\dsh-desktop.log`（运行时自动创建目录；目录不可用时静默降级、不崩溃）。
 
 ## 9. 测试场景
 
@@ -173,4 +176,4 @@ Backend 地址 / 启动命令默认已写死为当前 checkout。可通过环境
 Windows Installer（NSIS/MSI）、自动更新、登录、云同步、托盘高级功能。安装包方向见「未来安装包」一节：
 
 - `DSH-Setup.exe` = `DSH Desktop.exe` + 必要 Runtime + 桌面快捷方式 + 开始菜单 + 可选开机启动。
-- 届时把 `bundle.active` 置为 `true` 并配置 `targets: ["nsis"]`，并把默认 `start_args` 指向安装后的 `dsh` 二进制（而非 checkout 路径）。
+- 届时把 `bundle.active` 置为 `true` 并配置 `targets: ["nsis"]`，并把默认 `repo_path`（`DSH_REPO_PATH`）指向随 Runtime 分发的 `dsh` 目录（而非 checkout 路径）。

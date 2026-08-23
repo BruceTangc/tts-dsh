@@ -29,14 +29,13 @@ use std::time::{Duration, Instant};
 const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:3080/";
 /// Launcher for the backend process.
 const DEFAULT_START_COMMAND: &str = "node";
-/// Default fixed, whitelisted launch arguments: built `dsh` CLI, web profile,
-/// and `--no-open` so the desktop never opens a second browser tab.
+/// Default DeepSeek Harness repository root; the backend CLI lives under
+/// `<repo>/apps/cli/lib/bin.js`. Overridable via the `DSH_REPO_PATH` env var.
+const DEFAULT_REPO_PATH: &str = r"D:\DSH\deepseek-harness";
+/// Fixed, whitelisted launch arguments after the `bin.js` script path: the web
+/// profile and `--no-open` so the desktop never opens a second browser tab.
 fn default_start_args_vec() -> Vec<String> {
-    vec![
-        r"D:\DSH\deepseek-harness\apps\cli\lib\bin.js".to_string(),
-        "web".to_string(),
-        "--no-open".to_string(),
-    ]
+    vec!["web".to_string(), "--no-open".to_string()]
 }
 /// Overall health-check deadline.
 const DEFAULT_HEALTH_TIMEOUT_SEC: u64 = 60;
@@ -56,6 +55,8 @@ pub struct BackendConfig {
     pub backend_url: String,
     #[serde(default = "default_start_command")]
     pub start_command: String,
+    #[serde(default = "default_repo_path")]
+    pub repo_path: String,
     #[serde(default = "default_start_args_vec")]
     pub start_args: Vec<String>,
     #[serde(default = "default_health_timeout_sec")]
@@ -70,6 +71,9 @@ fn default_backend_url() -> String {
 fn default_start_command() -> String {
     DEFAULT_START_COMMAND.to_string()
 }
+fn default_repo_path() -> String {
+    DEFAULT_REPO_PATH.to_string()
+}
 fn default_health_timeout_sec() -> u64 {
     DEFAULT_HEALTH_TIMEOUT_SEC
 }
@@ -82,6 +86,7 @@ impl Default for BackendConfig {
         Self {
             backend_url: DEFAULT_BACKEND_URL.to_string(),
             start_command: DEFAULT_START_COMMAND.to_string(),
+            repo_path: DEFAULT_REPO_PATH.to_string(),
             start_args: default_start_args_vec(),
             health_timeout_sec: DEFAULT_HEALTH_TIMEOUT_SEC,
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
@@ -118,6 +123,11 @@ impl BackendConfig {
                 config.start_command = cmd;
             }
         }
+        if let Ok(repo) = env::var("DSH_REPO_PATH") {
+            if !repo.is_empty() {
+                config.repo_path = repo;
+            }
+        }
         if let Ok(args_json) = env::var("DSH_BACKEND_START_ARGS") {
             match serde_json::from_str::<Vec<String>>(&args_json) {
                 Ok(args) => config.start_args = args,
@@ -146,13 +156,24 @@ fn config_file_path() -> Option<PathBuf> {
     Some(dir.join(CONFIG_FILE_NAME))
 }
 
-/// Append a diagnostic line to `dsh-desktop.log` next to the executable and echo
+/// Resolve the log file path: `%LOCALAPPDATA%\DSH\logs\dsh-desktop.log`, created
+/// on demand. Returns `None` (rather than crashing) when the directory cannot be
+/// resolved or created, so logging can never fail the desktop.
+fn log_file_path() -> Option<PathBuf> {
+    let local = env::var("LOCALAPPDATA").ok()?;
+    if local.is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(local).join("DSH").join("logs");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("dsh-desktop.log"))
+}
+
+/// Append a diagnostic line to `%LOCALAPPDATA%\DSH\logs\dsh-desktop.log` and echo
 /// it to stderr. Best-effort: logging must never fail the app.
 pub fn log_line(msg: &str) {
     eprintln!("dsh-desktop: {msg}");
-    let Ok(exe) = env::current_exe() else { return };
-    let Some(dir) = exe.parent() else { return };
-    let path = dir.join("dsh-desktop.log");
+    let Some(path) = log_file_path() else { return };
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -173,8 +194,10 @@ pub fn ensure_backend_ready(config: &BackendConfig) -> Result<String, String> {
     }
 
     log_line(&format!(
-        "no backend detected; starting one ({} {:?})",
-        config.start_command, config.start_args
+        "no backend detected; starting one ({} {} {:?})",
+        config.start_command,
+        bin_script_path(config).display(),
+        config.start_args
     ));
     let mut child = spawn_backend(config)?;
     let pid = child.id();
@@ -219,12 +242,35 @@ fn probe(url: &str) -> bool {
     }
 }
 
-/// Spawn the backend with the fixed, whitelisted command. Stdio is nulled so
-/// the child survives a desktop exit without inheriting a broken pipe, and the
-/// desktop intentionally never reaps it (V1: keep running on exit).
+/// Resolve the backend CLI script path: `<repo_path>/apps/cli/lib/bin.js`.
+fn bin_script_path(config: &BackendConfig) -> PathBuf {
+    PathBuf::from(&config.repo_path)
+        .join("apps")
+        .join("cli")
+        .join("lib")
+        .join("bin.js")
+}
+
+/// Spawn the backend with the fixed, whitelisted command. The CLI path is
+/// derived from `repo_path`; a missing script fails fast with a clear error
+/// instead of waiting out the health deadline. Stdio is nulled so the child
+/// survives a desktop exit without inheriting a broken pipe, and the desktop
+/// intentionally never reaps it (V1: keep running on exit).
 fn spawn_backend(config: &BackendConfig) -> Result<Child, String> {
+    let script = bin_script_path(config);
+    if !script.exists() {
+        return Err(format!(
+            "DSH runtime not found: {}\nSet DSH_REPO_PATH to the DeepSeek Harness repository root (default: {}).",
+            script.display(),
+            DEFAULT_REPO_PATH,
+        ));
+    }
+
+    let mut args = vec![script.to_string_lossy().into_owned()];
+    args.extend(config.start_args.iter().cloned());
+
     Command::new(&config.start_command)
-        .args(&config.start_args)
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

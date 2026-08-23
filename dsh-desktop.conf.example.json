@@ -1,11 +1,8 @@
 {
   "backend_url": "http://127.0.0.1:3080/",
   "start_command": "node",
-  "start_args": [
-    "D:\\DSH\\deepseek-harness\\apps\\cli\\lib\\bin.js",
-    "web",
-    "--no-open"
-  ],
+  "repo_path": "D:\\DSH\\deepseek-harness",
+  "start_args": ["web", "--no-open"],
   "health_timeout_sec": 60,
   "poll_interval_ms": 500
 }
