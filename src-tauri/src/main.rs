@@ -32,6 +32,21 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Extra WebView2 browser arguments (Windows only). Disabling the GPU is a
+/// common fix for the "web content freezes after a while, but the same page is
+/// fine in a regular browser" symptom, where the WebView2 GPU process hangs.
+/// Override with the `DSH_WEBVIEW2_ARGS` env var to test other flags without
+/// rebuilding. The default re-includes wry's own defaults, which this call
+/// otherwise replaces.
+fn webview2_args() -> String {
+    const DEFAULT: &str =
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu";
+    match std::env::var("DSH_WEBVIEW2_ARGS") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => DEFAULT.to_string(),
+    }
+}
+
 /// Build the system tray icon with its menu, kept alive for the process lifetime.
 /// Left-click and "打开 DSH" restore the window; "退出 DSH" actually exits.
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -111,6 +126,7 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     let init_script = build_init_script(&desktop_version, &runtime_version);
     backend::log_line(&format!("desktop started; backend url {}", config.backend_url));
+    backend::log_line(&format!("webview2 args: {}", webview2_args()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -126,6 +142,7 @@ fn main() {
                 .resizable(true)
                 .center()
                 .initialization_script(&init_script)
+                .additional_browser_args(&webview2_args())
                 .build()?;
 
             // Close (X) → hide to tray. Registered on the window itself so it
