@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "DSH Desktop shell capability. No IPC is exposed: the DSH Web UI talks to the backend over HTTP/WebSocket, never through Tauri IPC. The backend launch is performed entirely in Rust, never triggered from the Web UI.",
+  "windows": ["main"],
+  "permissions": []
+}

@@ -1,0 +1,20 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Node
+node_modules/
+dist-js/
+*.tsbuildinfo
+
+# Generated icons from `pnpm icons` (keep the committed set in src-tauri/icons)
+app-icon.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local runtime config (never commit machine-specific paths)
+dsh-desktop.conf.json

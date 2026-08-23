@@ -1,0 +1,15 @@
+{
+  "name": "dsh-desktop",
+  "version": "0.1.0",
+  "description": "DSH Desktop — a Tauri Windows shell that reuses the existing DSH backend and Web UI",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "tauri icon"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
