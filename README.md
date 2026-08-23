@@ -44,7 +44,7 @@ STARTING
 ```
 
 - **第一优先级**：复用已存在的 Backend。
-- 只有确认 Backend 不存在，才启动一个 Backend（`node $DSH_REPO_PATH\apps\cli\lib\bin.js web --no-open`）。
+- 只有确认 Backend 不存在，才启动一个 Backend（生产：`dsh web --no-open`；开发 checkout：`node $DSH_REPO_PATH\apps\cli\lib\bin.js web --no-open`）。
 - 检测是**真实健康检查**（HTTP 200 + `__DSH_BOOT__`），不是猜端口、不是 `sleep 5`。
 - 超时（默认 60s）后给出明确错误，不无限等待。
 
@@ -61,7 +61,7 @@ Desktop 永不 kill 用户已有的 Backend。
 
 - 不向 Web UI 暴露任何 Tauri IPC：`capabilities/default.json` 权限为**空**。
 - Backend 启动完全在 Rust 内部完成，Web UI 无法触发、无法传参。
-- 启动命令**固定/白名单化**：只允许 `node <DSH_REPO_PATH>\apps\cli\lib\bin.js web --no-open`，路径与参数来自配置文件 / 环境变量 / 内置默认值，绝不来自运行时输入。
+- 启动命令**固定/白名单化**：生产只允许 `dsh web --no-open`（PATH 上的官方命令），开发用 `node <DSH_REPO_PATH>\apps\cli\lib\bin.js web --no-open`，参数来自配置文件 / 环境变量 / 内置默认值，绝不来自运行时输入。
 - 远程 DSH Web UI 通过 HTTP/WebSocket 直连 Backend，与浏览器行为一致，不经 Tauri 桥。
 
 ## 5. 目录结构
@@ -143,8 +143,8 @@ Backend 地址 / Runtime 路径默认已内置。可通过环境变量覆盖（*
 | 环境变量 | 说明 |
 |---|---|
 | `DSH_BACKEND_URL` | 例如 `http://127.0.0.1:8080/` |
-| `DSH_REPO_PATH` | DeepSeek Harness 仓库根目录，默认 `D:\DSH\deepseek-harness`；启动脚本取 `$DSH_REPO_PATH\apps\cli\lib\bin.js` |
-| `DSH_BACKEND_START_COMMAND` | 默认 `node` |
+| `DSH_REPO_PATH` | 可选（仅开发）：DeepSeek Harness 仓库根目录；设置后用 `node $DSH_REPO_PATH\apps\cli\lib\bin.js` 启动。**默认不设置**（生产直接调用 PATH 上的 `dsh` 命令）|
+| `DSH_BACKEND_START_COMMAND` | 默认 `dsh`（生产模式）|
 | `DSH_BACKEND_START_ARGS` | JSON 数组，`bin.js` 之后的固定参数，默认 `["web","--no-open"]` |
 | `DSH_BACKEND_HEALTH_TIMEOUT_SEC` | 默认 `60` |
 
@@ -176,4 +176,4 @@ Backend 地址 / Runtime 路径默认已内置。可通过环境变量覆盖（*
 Windows Installer（NSIS/MSI）、自动更新、登录、云同步、托盘高级功能。安装包方向见「未来安装包」一节：
 
 - `DSH-Setup.exe` = `DSH Desktop.exe` + 必要 Runtime + 桌面快捷方式 + 开始菜单 + 可选开机启动。
-- 届时把 `bundle.active` 置为 `true` 并配置 `targets: ["nsis"]`，并把默认 `repo_path`（`DSH_REPO_PATH`）指向随 Runtime 分发的 `dsh` 目录（而非 checkout 路径）。
+- 届时把 `bundle.active` 置为 `true` 并配置 `targets: ["nsis"]`；生产模式默认调用 PATH 上的 `dsh` 命令，**Desktop 安装目录与 DSH Runtime 完全分离**。

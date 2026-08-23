@@ -78,7 +78,10 @@ fn main() {
     // Web UI. Loaded before the window so the init script can carry versions.
     let config = backend::BackendConfig::load();
     let desktop_version = env!("CARGO_PKG_VERSION").to_string();
-    let runtime_version = updates::read_runtime_version(&config.repo_path)
+    let runtime_version = config
+        .repo_path
+        .as_deref()
+        .and_then(updates::read_runtime_version)
         .unwrap_or_else(|| "unknown".to_string());
     let init_script = build_init_script(&desktop_version, &runtime_version);
     backend::log_line(&format!("desktop started; backend url {}", config.backend_url));

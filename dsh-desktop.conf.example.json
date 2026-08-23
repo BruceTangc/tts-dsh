@@ -1,7 +1,6 @@
 {
   "backend_url": "http://127.0.0.1:3080/",
-  "start_command": "node",
-  "repo_path": "D:\\DSH\\deepseek-harness",
+  "start_command": "dsh",
   "start_args": ["web", "--no-open"],
   "health_timeout_sec": 60,
   "poll_interval_ms": 500

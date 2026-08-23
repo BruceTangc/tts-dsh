@@ -27,13 +27,11 @@ use std::time::{Duration, Instant};
 
 /// Canonical loopback URL of `dsh web` (the same page the browser loads).
 const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:3080/";
-/// Launcher for the backend process.
-const DEFAULT_START_COMMAND: &str = "node";
-/// Default DeepSeek Harness repository root; the backend CLI lives under
-/// `<repo>/apps/cli/lib/bin.js`. Overridable via the `DSH_REPO_PATH` env var.
-const DEFAULT_REPO_PATH: &str = r"D:\DSH\deepseek-harness";
-/// Fixed, whitelisted launch arguments after the `bin.js` script path: the web
-/// profile and `--no-open` so the desktop never opens a second browser tab.
+/// Launcher for the backend process (production: the official `dsh` command on
+/// PATH). The dev checkout mode instead runs `node` on `<repo>/apps/cli/lib/bin.js`.
+const DEFAULT_START_COMMAND: &str = "dsh";
+/// Fixed, whitelisted launch arguments: the web profile and `--no-open` so the
+/// desktop never opens a second browser tab.
 fn default_start_args_vec() -> Vec<String> {
     vec!["web".to_string(), "--no-open".to_string()]
 }
@@ -55,8 +53,10 @@ pub struct BackendConfig {
     pub backend_url: String,
     #[serde(default = "default_start_command")]
     pub start_command: String,
-    #[serde(default = "default_repo_path")]
-    pub repo_path: String,
+    /// Optional dev checkout root. `None` (production) launches the `dsh`
+    /// command; `Some(repo)` runs `node <repo>/apps/cli/lib/bin.js` instead.
+    #[serde(default)]
+    pub repo_path: Option<String>,
     #[serde(default = "default_start_args_vec")]
     pub start_args: Vec<String>,
     #[serde(default = "default_health_timeout_sec")]
@@ -71,9 +71,6 @@ fn default_backend_url() -> String {
 fn default_start_command() -> String {
     DEFAULT_START_COMMAND.to_string()
 }
-fn default_repo_path() -> String {
-    DEFAULT_REPO_PATH.to_string()
-}
 fn default_health_timeout_sec() -> u64 {
     DEFAULT_HEALTH_TIMEOUT_SEC
 }
@@ -86,7 +83,7 @@ impl Default for BackendConfig {
         Self {
             backend_url: DEFAULT_BACKEND_URL.to_string(),
             start_command: DEFAULT_START_COMMAND.to_string(),
-            repo_path: DEFAULT_REPO_PATH.to_string(),
+            repo_path: None,
             start_args: default_start_args_vec(),
             health_timeout_sec: DEFAULT_HEALTH_TIMEOUT_SEC,
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
@@ -125,7 +122,7 @@ impl BackendConfig {
         }
         if let Ok(repo) = env::var("DSH_REPO_PATH") {
             if !repo.is_empty() {
-                config.repo_path = repo;
+                config.repo_path = Some(repo);
             }
         }
         if let Ok(args_json) = env::var("DSH_BACKEND_START_ARGS") {
@@ -194,10 +191,8 @@ pub fn ensure_backend_ready(config: &BackendConfig) -> Result<String, String> {
     }
 
     log_line(&format!(
-        "no backend detected; starting one ({} {} {:?})",
-        config.start_command,
-        bin_script_path(config).display(),
-        config.start_args
+        "no backend detected; starting one ({})",
+        describe_start(config)
     ));
     let mut child = spawn_backend(config)?;
     let pid = child.id();
@@ -212,10 +207,9 @@ pub fn ensure_backend_ready(config: &BackendConfig) -> Result<String, String> {
             // This child failed to become ready; it is ours to reclaim.
             let _ = child.kill();
             return Err(format!(
-                "DSH backend did not become ready within {} seconds.\nStart command: {} {:?}\nURL: {}",
+                "DSH backend did not become ready within {} seconds.\nStart command: {}\nURL: {}",
                 config.health_timeout_sec,
-                config.start_command,
-                config.start_args,
+                describe_start(config),
                 config.backend_url,
             ));
         }
@@ -242,38 +236,56 @@ fn probe(url: &str) -> bool {
     }
 }
 
-/// Resolve the backend CLI script path: `<repo_path>/apps/cli/lib/bin.js`.
-fn bin_script_path(config: &BackendConfig) -> PathBuf {
-    PathBuf::from(&config.repo_path)
-        .join("apps")
-        .join("cli")
-        .join("lib")
-        .join("bin.js")
+/// Resolve the backend launch command and arguments.
+///
+/// Production (`repo_path == None`) launches the official `dsh` command with the
+/// fixed args (`dsh web --no-open`). Dev (`repo_path == Some(repo)`) runs
+/// `node <repo>/apps/cli/lib/bin.js` with the same args, failing fast with a
+/// clear error when that script does not exist.
+fn launch_command(config: &BackendConfig) -> Result<(String, Vec<String>), String> {
+    match &config.repo_path {
+        Some(repo) => {
+            let script = PathBuf::from(repo).join("apps").join("cli").join("lib").join("bin.js");
+            if !script.exists() {
+                return Err(format!(
+                    "DSH runtime not found: {}\nSet DSH_REPO_PATH to the DeepSeek Harness repository root.",
+                    script.display()
+                ));
+            }
+            let mut args = vec![script.to_string_lossy().into_owned()];
+            args.extend(config.start_args.iter().cloned());
+            Ok(("node".to_string(), args))
+        }
+        None => Ok((config.start_command.clone(), config.start_args.clone())),
+    }
 }
 
-/// Spawn the backend with the fixed, whitelisted command. The CLI path is
-/// derived from `repo_path`; a missing script fails fast with a clear error
-/// instead of waiting out the health deadline. Stdio is nulled so the child
-/// survives a desktop exit without inheriting a broken pipe, and the desktop
-/// intentionally never reaps it (V1: keep running on exit).
-fn spawn_backend(config: &BackendConfig) -> Result<Child, String> {
-    let script = bin_script_path(config);
-    if !script.exists() {
-        return Err(format!(
-            "DSH runtime not found: {}\nSet DSH_REPO_PATH to the DeepSeek Harness repository root (default: {}).",
-            script.display(),
-            DEFAULT_REPO_PATH,
-        ));
+/// Human-readable description of the backend launch, for logs and errors.
+fn describe_start(config: &BackendConfig) -> String {
+    match launch_command(config) {
+        Ok((program, args)) => {
+            let mut parts = vec![program];
+            parts.extend(args.iter().cloned());
+            parts.join(" ")
+        }
+        Err(err) => err,
     }
+}
 
-    let mut args = vec![script.to_string_lossy().into_owned()];
-    args.extend(config.start_args.iter().cloned());
-
-    Command::new(&config.start_command)
+/// Spawn the backend with the fixed, whitelisted command. Stdio is nulled so the
+/// child survives a desktop exit without inheriting a broken pipe, and the
+/// desktop intentionally never reaps it (V1: keep running on exit).
+fn spawn_backend(config: &BackendConfig) -> Result<Child, String> {
+    let (program, args) = launch_command(config)?;
+    Command::new(&program)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|err| format!("failed to start DSH backend: {err}"))
+        .map_err(|err| {
+            format!(
+                "failed to start DSH backend ({program}): {err}\nIs the official DSH installed and on PATH?"
+            )
+        })
 }
