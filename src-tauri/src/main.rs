@@ -5,9 +5,9 @@ mod backend;
 mod platform;
 mod updates;
 
-use tauri::Manager;
-use tauri::WebviewUrl;
-use tauri::WebviewWindowBuilder;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// Build the initialization script injected before any page script runs. It
@@ -20,6 +20,39 @@ fn build_init_script(desktop_version: &str, runtime_version: &str) -> String {
          window.__DSH_DESKTOP_VERSION__ = {desktop_version:?};\
          window.__DSH_RUNTIME_VERSION__ = {runtime_version:?};"
     )
+}
+
+/// Build the system tray icon with its menu, kept alive for the process lifetime.
+/// "打开 DSH" restores and focuses the existing window; "退出 DSH" actually exits.
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 DSH", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+
+    // Reuse the official DSH whale icon (the same one used by the window/exe).
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    let tray = builder.build(app)?;
+    // Dropping the handle removes the tray, so leak it for the process lifetime.
+    std::mem::forget(tray);
+    Ok(())
 }
 
 fn main() {
@@ -65,6 +98,8 @@ fn main() {
                 .initialization_script(&init_script)
                 .build()?;
 
+            setup_tray(app)?;
+
             let handle = app.handle().clone();
 
             // Run the detection/start/health state machine off the main thread so
@@ -103,6 +138,24 @@ fn main() {
             });
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            match event {
+                // X button → hide to tray instead of exiting (tray "退出 DSH" exits).
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // Minimize button → hide to tray.
+                WindowEvent::Resized(size) => {
+                    if size.width == 0 && size.height == 0 {
+                        if window.is_minimized().unwrap_or(false) {
+                            let _ = window.hide();
+                        }
+                    }
+                }
+                _ => {}
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
