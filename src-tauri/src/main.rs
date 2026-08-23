@@ -53,6 +53,27 @@ fn webview2_args() -> String {
 fn run_update_flow(app: &tauri::AppHandle) {
     let current = env!("CARGO_PKG_VERSION");
 
+    // Runtime (dsh CLI) update check — reminder only, never auto-install. Run
+    // first so it is shown even when a Desktop update then downloads + exits.
+    match updates::check_runtime_update() {
+        Ok(r) if r.update_available => {
+            backend::log_line(&format!(
+                "runtime update available: {} -> {}",
+                r.installed, r.latest
+            ));
+            let _ = app
+                .dialog()
+                .message(format!(
+                    "Runtime（dsh）有新版本 {}（当前 {}）。\n请运行：npm install -g @deepseek-ai/dsh@latest",
+                    r.latest, r.installed
+                ))
+                .title("DSH Runtime 更新")
+                .blocking_show();
+        }
+        Ok(_) => {}
+        Err(err) => backend::log_line(&format!("runtime update check skipped: {err}")),
+    }
+
     let info = match updates::check_updates(current) {
         Ok(info) => info,
         Err(err) => {

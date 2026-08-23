@@ -15,6 +15,11 @@ use std::time::Duration;
 pub const DESKTOP_LATEST_URL: &str =
     "https://api.github.com/repos/BruceTangc/tts-dsh/releases/latest";
 
+/// Official DSH Runtime (`dsh` CLI) latest version on the npm registry — the
+/// official, recommended update channel.
+pub const RUNTIME_NPM_LATEST_URL: &str =
+    "https://registry.npmjs.org/@deepseek-ai/dsh/latest";
+
 /// One checked update: current vs latest version + the installer download URL.
 #[derive(Debug, Clone)]
 pub struct UpdateInfo {
@@ -81,6 +86,60 @@ pub fn download_installer(url: &str, dest: &std::path::Path) -> Result<(), Strin
     let mut file = std::fs::File::create(dest).map_err(|e| format!("create error: {e}"))?;
     std::io::copy(&mut reader, &mut file).map_err(|e| format!("write error: {e}"))?;
     Ok(())
+}
+
+/// Runtime (`dsh` CLI) update status: installed vs latest npm version.
+#[derive(Debug, Clone)]
+pub struct RuntimeUpdateInfo {
+    pub installed: String,
+    pub latest: String,
+    pub update_available: bool,
+}
+
+/// Shape of the npm registry `…/latest` response (only the version is read).
+#[derive(Deserialize)]
+struct NpmLatest {
+    version: String,
+}
+
+/// Check the installed `dsh` CLI version against the latest on npm. Fails with
+/// an error string when `dsh` is not installed or the registry is unreachable.
+pub fn check_runtime_update() -> Result<RuntimeUpdateInfo, String> {
+    let installed = installed_dsh_version()?;
+    let latest = fetch_npm_latest(RUNTIME_NPM_LATEST_URL)?;
+    Ok(RuntimeUpdateInfo {
+        installed: installed.clone(),
+        latest: latest.clone(),
+        update_available: is_newer(&latest, &installed),
+    })
+}
+
+/// Read the installed `dsh` version by running `cmd /C dsh --version`.
+fn installed_dsh_version() -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "dsh", "--version"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("dsh --version 失败：{e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return Err("dsh 未安装（`dsh --version` 无输出）".to_string());
+    }
+    Ok(text)
+}
+
+/// Fetch the latest version from the npm registry `…/latest` endpoint.
+fn fetch_npm_latest(url: &str) -> Result<String, String> {
+    let resp = ureq::get(url)
+        .set("User-Agent", "dsh-desktop")
+        .timeout(Duration::from_secs(15))
+        .call()
+        .map_err(|e| format!("network error: {e}"))?;
+    let body = resp.into_string().map_err(|e| format!("read error: {e}"))?;
+    let latest: NpmLatest = serde_json::from_str(&body).map_err(|e| format!("parse error: {e}"))?;
+    Ok(latest.version)
 }
 
 /// Read the installed Runtime version from `<repo_path>/package.json`.
