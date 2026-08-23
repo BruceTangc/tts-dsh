@@ -121,16 +121,17 @@ cargo --version   # 应有输出
 ## 7. 构建与运行
 
 ```powershell
-# 一键构建（校验工具链 + 安装依赖 + 构建 + 报告 exe 路径）
+# 一键构建（纯 cargo，无需 npm/Node）：校验工具链 + cargo build --release + 报告 exe 路径
 .\scripts\build.ps1
 
-# 或手动分步：
-pnpm install          # 首次：安装 npm 依赖（仅 @tauri-apps/cli）
-pnpm tauri dev        # 开发运行（Backend 已运行时直接复用；未运行时自动启动）
-pnpm tauri build      # 构建独立 exe（不生成安装包，符合 V1）
+# 或手动：
+cd src-tauri
+cargo build --release
 # 产物：src-tauri/target/release/dsh-desktop.exe
 ```
 
+> 发布构建只需 `cargo build --release`：Rust 外壳编译后会把 `dist/index.html` 与图标内嵌进 exe，无需 npm 依赖。`package.json` 仅用于可选的 `tauri dev`（开发热重载，需要 `pnpm install`）。
+>
 > `rust-toolchain.toml` 固定了 Rust `stable` + `x86_64-pc-windows-msvc` 目标，`rustup` 会自动采用。
 
 > 图标：仓库已含 `src-tauri/icons/`；如需重新生成可运行 `scripts/generate-icons.ps1`，或用 `pnpm icons <图片>`。
