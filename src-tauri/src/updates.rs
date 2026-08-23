@@ -17,6 +17,10 @@ use std::time::Duration;
 pub const RUNTIME_LATEST_URL: &str =
     "https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/latest";
 
+/// Official DSH Desktop release source (this repo's GitHub Releases).
+pub const DESKTOP_LATEST_URL: &str =
+    "https://api.github.com/repos/BruceTangc/tts-dsh/releases/latest";
+
 /// One checked version pair.
 #[derive(Debug, Clone)]
 pub struct VersionStatus {
