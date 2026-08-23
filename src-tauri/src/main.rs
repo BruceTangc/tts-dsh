@@ -83,9 +83,17 @@ fn main() {
     // backend.
     if !platform::acquire_single_instance() {
         backend::log_line("another instance is running; activating it and exiting");
-        platform::activate_existing_window();
+        if !platform::signal_activation() {
+            // Event not yet created (tiny race at first launch): raw fallback.
+            platform::activate_existing_window();
+        }
         std::process::exit(0);
     }
+
+    // Create the activation event so later launches can signal us to restore
+    // the window through Tauri's own `show()` (keeps tao's VISIBLE flag coherent,
+    // so close-to-tray keeps working after a re-open).
+    let activation_event = platform::create_activation_event();
 
     // Self-register the dsh:// protocol (best-effort, HKCU) so the browser entry
     // page's "open desktop" button can launch us.
@@ -132,6 +140,18 @@ fn main() {
             });
 
             setup_tray(app)?;
+
+            // Background thread: when a second launch signals the activation
+            // event, restore the window through Tauri (never raw ShowWindow).
+            if let Some(event) = activation_event {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    platform::wait_for_activation(event);
+                    backend::log_line("activation event signaled; restoring window");
+                    let h = handle.clone();
+                    let _ = handle.run_on_main_thread(move || show_main_window(&h));
+                });
+            }
 
             let handle = app.handle().clone();
 

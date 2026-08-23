@@ -11,8 +11,13 @@ use std::env;
 /// Named mutex identifying the single running Desktop instance.
 const MUTEX_NAME: &str = "DSHDesktop_SingleInstance_Mutex";
 
-/// Window title used to find the already-running Desktop window.
+/// Window title used to find the already-running Desktop window (fallback path).
 const WINDOW_TITLE: &str = "DSH";
+
+/// Named event a second launch signals so the already-running instance restores
+/// its window through Tauri's own `show()` — never raw `ShowWindow`, which would
+/// desync tao's cached `VISIBLE` flag and break later close-to-tray.
+const ACTIVATION_EVENT_NAME: &str = "DSHDesktop_Activation_Event";
 
 /// Acquire the single-instance mutex.
 ///
@@ -40,8 +45,61 @@ pub fn acquire_single_instance() -> bool {
     first
 }
 
+/// Create (first instance) the named activation event and return its raw handle
+/// value, leaked for the process lifetime. Returns `None` on failure.
+pub fn create_activation_event() -> Option<isize> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Threading::CreateEventW;
+
+    let name: Vec<u16> = ACTIVATION_EVENT_NAME
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateEventW(None, false, false, PCWSTR(name.as_ptr())) }.ok()?;
+    let raw = handle.0 as isize;
+    // Leak so the OS event handle stays open for the process lifetime.
+    let _ = Box::leak(Box::new(handle));
+    Some(raw)
+}
+
+/// Signal the named activation event so the first instance restores its window
+/// through Tauri. Returns `false` if the event could not be opened (e.g. the
+/// first instance has not created it yet), letting the caller fall back to the
+/// raw `ShowWindow` path.
+pub fn signal_activation() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
+
+    let name: Vec<u16> = ACTIVATION_EVENT_NAME
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let Ok(handle) = (unsafe { OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())) }) else {
+        return false;
+    };
+    let ok = unsafe { SetEvent(handle) }.is_ok();
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    ok
+}
+
+/// Block until the activation event is signaled. Runs on the first instance's
+/// background thread; `event` is the value returned by `create_activation_event`.
+pub fn wait_for_activation(event: isize) {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Threading::WaitForSingleObject;
+
+    unsafe {
+        let _ = WaitForSingleObject(HANDLE(event as *mut core::ffi::c_void), u32::MAX);
+    }
+}
+
 /// Bring the already-running Desktop window to the foreground (restoring it if
-/// minimized). A no-op when the window cannot be found.
+/// minimized). A no-op when the window cannot be found. This is the raw Win32
+/// fallback used only when the activation event is unavailable; the preferred
+/// path is `signal_activation`, which keeps Tauri's visibility state coherent.
 pub fn activate_existing_window() {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::{
