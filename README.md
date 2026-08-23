@@ -72,6 +72,7 @@ dsh-desktop/
 │   ├── Cargo.toml
 │   ├── build.rs
 │   ├── tauri.conf.json
+│   ├── installer-hooks.nsh  # NSIS 钩子：卸载时校验「不删 CLI」
 │   ├── capabilities/default.json
 │   ├── icons/
 │   └── src/
@@ -82,7 +83,8 @@ dsh-desktop/
 ├── scripts/
 │   ├── detect-dsh.ps1       # 检测 Backend 是否就绪
 │   ├── start-dsh.ps1        # 启动 Backend（web --no-open）
-│   └── health-check.ps1     # 轮询直到就绪/超时
+│   ├── health-check.ps1     # 轮询直到就绪/超时
+│   └── test-uninstall-regression.ps1  # 卸载 CLI 隔离回归测试
 ├── dsh-desktop.conf.example.json
 ├── package.json
 └── README.md
@@ -171,9 +173,36 @@ Backend 地址 / Runtime 路径默认已内置。可通过环境变量覆盖（*
 .\scripts\start-dsh.ps1        # 手动启动（先确认 3080 无服务）
 ```
 
-## 10. 后续（V1 暂不做）
+## 10. 安装器与 CLI 隔离（重要契约）
 
-Windows Installer（NSIS/MSI）、自动更新、登录、云同步、托盘高级功能。安装包方向见「未来安装包」一节：
+DSH Desktop 与全局 `dsh` npm CLI **完全解耦**，二者互相独立安装 / 升级 / 卸载：
+
+- `dsh` CLI 是独立的 npm 全局包，位于 `%APPDATA%\npm`（`dsh.cmd` / `dsh.ps1` / `dsh` + `node_modules`）。
+- DSH Desktop 安装器**永不**安装、覆盖或卸载 CLI；卸载器**永不**删除 `%APPDATA%\npm` 或 `dsh` 命令入口。
+- Desktop 运行时通过 PATH 发现 `dsh`（生产）或 `$DSH_REPO_PATH`（开发），只「使用」CLI，不「拥有」它。
+
+卸载器唯一会删除的「应用数据」是 `%APPDATA%\com.dsh.desktop` 与 `%LOCALAPPDATA%\com.dsh.desktop`（WebView2 缓存等，且仅当勾选「删除应用数据」时），与 npm 全局目录无关。即使勾选「删除应用数据」，`%APPDATA%\npm` 与 `dsh` 命令也**不受影响**。
+
+### 10.1 构建安装包
+
+```powershell
+npm run build          # = tauri build，生成 NSIS 安装包
+# 产物：src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe
+```
+
+`tauri.conf.json` 里 `bundle.windows.nsis.installerHooks` 指向 `src-tauri/installer-hooks.nsh`，在卸载前后快照并复检 `%APPDATA%\npm\dsh.cmd`，一旦未来回归导致 CLI 被删，卸载时立即告警。
+
+### 10.2 卸载回归测试
+
+```powershell
+.\scripts\test-uninstall-regression.ps1
+```
+
+静态断言生成的 `installer.nsi`：`BUNDLEID` 必须是 `com.dsh.desktop`（而非 npm）、任何 `RmDir/RMDir/Delete` 都不得引用 npm 目录、且「删除应用数据」只作用于 `${BUNDLEID}`。
+
+## 11. 后续（暂不做）
+
+自动更新、登录、云同步、托盘高级功能。安装包方向见「未来安装包」一节：
 
 - `DSH-Setup.exe` = `DSH Desktop.exe` + 必要 Runtime + 桌面快捷方式 + 开始菜单 + 可选开机启动。
-- 届时把 `bundle.active` 置为 `true` 并配置 `targets: ["nsis"]`；生产模式默认调用 PATH 上的 `dsh` 命令，**Desktop 安装目录与 DSH Runtime 完全分离**。
+- 生产模式默认调用 PATH 上的 `dsh` 命令，**Desktop 安装目录与 DSH Runtime 完全分离**。

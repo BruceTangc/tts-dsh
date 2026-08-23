@@ -27,7 +27,8 @@
         "languages": ["English", "SimpChinese"],
         "displayLanguageSelector": false,
         "startMenuFolder": "DSH Desktop",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "installer-hooks.nsh"
       }
     }
   }

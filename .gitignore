@@ -18,3 +18,8 @@ Thumbs.db
 
 # Local runtime config (never commit machine-specific paths)
 dsh-desktop.conf.json
+
+# Local build/inspection artifacts
+_build.log
+_*.nsi
+_tauri-*
