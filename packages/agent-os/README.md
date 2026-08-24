@@ -37,8 +37,22 @@ Organization → OrganizationNode(tree) → Role → AgentBinding → DSH Agent/
 | `src/model.ts` | 核心类型：Organization/OrganizationNode/Role/AgentBinding/Delegation/Authority/Audit |
 | `src/store.ts` | 状态存储（内存 + 可选 JSON 落盘） |
 | `src/service.ts` | 治理服务：初始化/节点/角色/绑定/委派/授权/审计 |
-| `src/index.ts` | cordis 插件入口（挂 `ctx.agentOs`，自动初始化默认 Organization） |
-| `test/agent-os.test.ts` | 单元测试（9 项） |
+| `src/index.ts` | cordis 插件入口（挂 `ctx.agentOs`，自动初始化默认 Organization，unload 清理） |
+| `src/dsh-adapter.ts` | DSH Runtime Adapter 接口（createAgent/resume/enter/isOwnedBy/dispose/delegationDepth） |
+| `src/mock-dsh-adapter.ts` | Mock DSH Runtime（仅测试用，非真实 DSH） |
+| `test/agent-os.test.ts` | 单元测试（Organization/Node/Role/Binding/Delegation/Authority/Audit，9 项） |
+| `test/runtime-contract.test.ts` | Runtime Integration Contract Tests（mock，7 项） |
+| `docs/real-runtime-test.md` | 真实 DSH Runtime 验证指南（preview） |
+
+## Runtime 状态标记
+
+```
+Runtime integration implementation: READY
+Real DSH runtime validation: PENDING LOCAL TEST
+```
+
+Agent OS 已实现 Runtime Activation 接口/适配/生命周期，并通过 mock 契约测试；
+真实 DSH 验证需 ≥4GB 机器，操作手册见 `docs/real-runtime-test.md`。
 
 ## 使用
 

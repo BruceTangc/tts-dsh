@@ -69,7 +69,7 @@ export class AgentOsStore {
       typeof s === 'object' &&
       typeof s.nodes === 'object' &&
       typeof s.roles === 'object' &&
-      Array.isArray(s.delegations) &&
+      typeof s.delegations === 'object' &&
       Array.isArray(s.audit)
     )
   }

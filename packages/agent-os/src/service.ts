@@ -22,6 +22,7 @@ import type {
   AuditEvent,
 } from './model.js'
 import { AgentOsStore } from './store.js'
+import type { DshRuntimeAdapter } from './dsh-adapter.js'
 
 /** 创建组织/节点时需要的简单 id 生成（可注入以便测试确定性） */
 export type IdGen = () => string
@@ -32,6 +33,8 @@ export function defaultIdGen(): string {
 
 export interface AgentOsServiceDeps {
   store: AgentOsStore
+  /** DSH Runtime 适配（真实 DSH 或 mock）。缺省时 Runtime Binding 仅记录不启动真正 Agent。 */
+  runtime?: DshRuntimeAdapter
   idGen?: IdGen
   now?: () => string
 }
@@ -50,11 +53,15 @@ interface NewNodeInput {
  */
 export class AgentOsService {
   private store: AgentOsStore
+  private runtime: DshRuntimeAdapter | undefined
   private idGen: IdGen
   private now: () => string
+  /** 存活 DSH Agent handle 引用（不入持久化；供 disposal 用，卸载时兜底清理） */
+  private liveHandles = new Map<string, import('./dsh-adapter.js').DshAgentHandle>()
 
   constructor(deps: AgentOsServiceDeps) {
     this.store = deps.store
+    this.runtime = deps.runtime
     this.idGen = deps.idGen ?? defaultIdGen
     this.now = deps.now ?? (() => new Date().toISOString())
   }
@@ -244,6 +251,123 @@ export class AgentOsService {
     const ts = this.now()
     this.store.upsertNode({ ...node, binding: null, updatedAt: ts })
     this.audit('agent', actorId, 'node.detach', 'node', nodeId)
+  }
+
+  /** 返回当前注入的 runtime adapter（未注入返回 undefined） */
+  get runtimeAdapter(): DshRuntimeAdapter | undefined {
+    return this.runtime
+  }
+
+  /**
+   * 激活组织节点 —— 创建/恢复一个真实 DSH Runtime Agent 并建立 AgentBinding。
+   *
+   * Agent OS 判断「该组织是否应启动 Agent」，DSH 负责「创建/恢复 Agent + 绑定 + Ownership」。
+   * 若未注入 runtime adapter，则退化为“仅记录待绑定”（binding=null，返回 null）。
+   *
+   * parentRuntimeId：父 Agent 的 runtime id（用于 DSH ownership：createAgent(ownerCtx)）。
+   */
+  async activateNode(
+    actorId: string,
+    nodeId: OrganizationNodeId,
+    options?: {
+      parentRuntimeId?: string
+      requestedId?: string
+      provider?: string
+      model?: string
+      prompt?: string
+    },
+  ): Promise<AgentBinding | null> {
+    if (!this.can(actorId, 'bind', nodeId)) {
+      throw new Error(`actor ${actorId} lacks authority bind on ${nodeId}`)
+    }
+    const node = this.store.getNode(nodeId)
+    if (!node) throw new Error(`node not found: ${nodeId}`)
+    if (!this.runtime) return null // 无 runtime host：仅记录不拉起
+
+    const handle = await this.runtime.createAgent(options?.parentRuntimeId, {
+      requestedId: options?.requestedId,
+      provider: options?.provider,
+      model: options?.model,
+      prompt: options?.prompt,
+    })
+    // enter(agent, owner)：向 DSH Registry 登记运行时 child
+    this.runtime.enterAgent(handle, options?.parentRuntimeId)
+
+    const ts = this.now()
+    const binding: AgentBinding = {
+      id: `binding-${this.idGen()}`,
+      organizationNodeId: nodeId,
+      runtimeAgentId: handle.id,
+      sessionId: handle.id,
+      status: 'active',
+      createdAt: ts,
+      updatedAt: ts,
+    }
+    // 附带记录 runtime handle 引用（供 disposal 用，不入持久化）
+    this.liveHandles.set(handle.id, handle)
+    this.store.upsertNode({ ...node, binding, updatedAt: ts })
+    this.audit('agent', actorId, 'node.activate', 'node', nodeId, {
+      runtimeAgentId: handle.id,
+      parentRuntimeId: options?.parentRuntimeId,
+    })
+    return binding
+  }
+
+  /**
+   * 恢复组织节点的 Runtime 绑定（持久化加载后：OrganizationTree 恢复 → 重新绑定）。
+   * 若旧 Runtime Agent 已不存在，则通过 resume/create 重新建立。
+   */
+  async resumeNode(actorId: string, nodeId: OrganizationNodeId): Promise<AgentBinding | null> {
+    if (!this.runtime) return null
+    const node = this.store.getNode(nodeId)
+    if (!node) throw new Error(`node not found: ${nodeId}`)
+    if (node.binding && node.binding.status === 'active') {
+      // 尝试恢复已存在的 runtime agent
+      try {
+        const handle = await this.runtime.resume(undefined, node.binding.runtimeAgentId)
+        this.liveHandles.set(handle.id, handle)
+        return node.binding
+      } catch {
+        // 旧 runtime 不存在 → 走重新创建
+      }
+    }
+    return this.activateNode(actorId, nodeId, {
+      parentRuntimeId: this.parentRuntimeId(node),
+    })
+  }
+
+  /** 找出某节点的父节点已激活的 runtime agent id（用于 ownership）。 */
+  private parentRuntimeId(node: OrganizationNode): string | undefined {
+    if (!node.parentId) return undefined
+    const parent = this.store.getNode(node.parentId)
+    return parent?.binding?.runtimeAgentId
+  }
+
+  /**
+   * 销毁组织节点的 Runtime Agent（AgentHandle.dispose），保留组织身份。
+   * DSH 负责实际 dispose，Agent OS 只更新 binding 状态。
+   */
+  async disposeNode(actorId: string, nodeId: OrganizationNodeId): Promise<boolean> {
+    if (!this.can(actorId, 'bind', nodeId)) {
+      throw new Error(`actor ${actorId} lacks authority bind on ${nodeId}`)
+    }
+    const node = this.store.getNode(nodeId)
+    if (!node) return false
+    if (!this.runtime || !node.binding) return false
+    const handle = this.liveHandles.get(node.binding.runtimeAgentId)
+    let ok = false
+    if (handle) {
+      ok = await this.runtime.dispose(handle)
+      this.liveHandles.delete(node.binding.runtimeAgentId)
+    }
+    const ts = this.now()
+    this.store.upsertNode({
+      ...node,
+      binding: node.binding ? { ...node.binding, status: 'stale', updatedAt: ts } : null,
+      updatedAt: ts,
+    })
+    this.audit('agent', actorId, 'node.dispose', 'node', nodeId, { ok })
+    return ok
   }
 
   /** 组织树：给定节点，返回其所有后代 id（含自身）。 */
@@ -442,5 +566,28 @@ export class AgentOsService {
 
   listAudit(): AuditEvent[] {
     return this.store.listAudit()
+  }
+
+  /* ================= 清理（Plugin unload） ================= */
+
+  /**
+   * 销毁所有存活 DSH Agent handle（Plugin unload/reload 时兜底，防孤儿 Agent）。
+   * 返回销毁的数量。组织身份（nodes）保留，仅清理 runtime 实例。
+   */
+  async disposeAll(actorId = 'system'): Promise<number> {
+    let disposed = 0
+    for (const handle of this.liveHandles.values()) {
+      try {
+        await handle.dispose()
+        disposed++
+      } catch {
+        /* 单个失败不阻断整体清理 */
+      }
+    }
+    this.liveHandles.clear()
+    if (disposed > 0) {
+      this.audit('system', actorId, 'org.disposeAll', undefined, undefined, { disposed })
+    }
+    return disposed
   }
 }
