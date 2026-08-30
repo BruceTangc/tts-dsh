@@ -206,9 +206,6 @@ export class ChannelRouter {
      *  intermediate per-step outputs (thinking / tool scaffolding) are not
      *  relayed — the user sees just the final result. */
     private handleSessionEvent(sessionId: string, event: SessionEvent): void {
-        // Forward each assistant step's text to Feishu immediately (real-time),
-        // rather than waiting for turn/end. This guarantees no final reply is
-        // ever dropped: every piece of assistant text — including from steps
         // Associate the latest assistant text for the turn; the FINAL answer is
         // the LAST assistant/message step. We keep it here and flush at
         // turn/end, so only the final reply goes out (no intermediate thinking).
