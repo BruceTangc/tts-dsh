@@ -126,34 +126,32 @@ const routedDup = await router.dispatchInbound({
 });
 check('Duplicate native message id ignored', routedDup === undefined);
 
-// Outbound: only the LAST assistant step with text is flushed at turn/end
-// (intermediate per-step thinking / tool scaffolding is never pushed earlier).
+// Outbound: assistant steps accumulate; the LAST one with text (the final
+// reply) is flushed at turn/end. Intermediate thinking steps are not sent.
+sentOut.length = 0;
 ctx.emit('session/event', { id: SessionId('session-1') }, {
     type: 'assistant/message',
     surfaceOp: 'append',
     data: { message: { content: [{ type: 'text', text: '让我查一下...' }, { type: 'tool-call', id: 'c1', name: 'x', arguments: '{}' }] } },
 });
-// Pure tool-call step (no text) — not relayed.
 ctx.emit('session/event', { id: SessionId('session-1') }, {
     type: 'assistant/message',
     surfaceOp: 'append',
     data: { message: { content: [{ type: 'tool-call', id: 'c2', name: 'y', arguments: '{}' }] } },
 });
-// Final pure-text step (the actual answer) comes LAST and wins.
 ctx.emit('session/event', { id: SessionId('session-1') }, {
     type: 'assistant/message',
     surfaceOp: 'append',
     data: { message: { content: [{ type: 'text', text: 'reply text' }] } },
 });
 await new Promise((r) => setTimeout(r, 10));
-check('Intermediate assistant steps not flushed before turn/end', sentOut.length === 0);
-// End the turn -> final accumulated text flushes.
+check('Intermediate assistant text not sent before turn/end', sentOut.length === 0);
 ctx.emit('session/event', { id: SessionId('session-1') }, {
     type: 'turn/end',
     data: { reason: 'end_turn' },
 });
 await new Promise((r) => setTimeout(r, 10));
-check('Assistant message forwarded to the chat on turn/end',
+check('Only the final assistant text is sent at turn/end',
     sentOut.length === 1 && sentOut[0][0] === '12345' && sentOut[0][1] === 'reply text');
 
 router.dispose();
