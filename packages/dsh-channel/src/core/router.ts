@@ -73,10 +73,9 @@ export class ChannelRouter {
 
     /** Session id → chats that have spoken, so replies land where the turn came from. */
     private readonly sessionChats = new Map<string, ChatRow[]>();
-    /** Most recent assistant text+images per session for the current turn. This
-     *  keeps intermediate per-step assistant/message events from being pushed to
-     *  Feishu; only the final text (emitted at turn/end) is sent. */
-    private readonly pendingAssistant = new Map<string, { text: string; images: readonly Extract<ContentBlock, { type: 'image' }>[] }>();
+    /** Latest assistant text+images per session for the current turn; the FINAL
+     *  reply is the last one, flushed at turn/end. */
+    private readonly finalAssistant = new Map<string, { text: string; images: readonly Extract<ContentBlock, { type: 'image' }>[] }>();
     /** Recently processed platform message ids, guarding against redelivery. */
     private readonly seenMessages = new Map<string, number>();
     private readonly offSessionEvent: () => void;
@@ -207,34 +206,35 @@ export class ChannelRouter {
      *  intermediate per-step outputs (thinking / tool scaffolding) are not
      *  relayed — the user sees just the final result. */
     private handleSessionEvent(sessionId: string, event: SessionEvent): void {
+        // Forward each assistant step's text to Feishu immediately (real-time),
+        // rather than waiting for turn/end. This guarantees no final reply is
+        // ever dropped: every piece of assistant text — including from steps
+        // Associate the latest assistant text for the turn; the FINAL answer is
+        // the LAST assistant/message step. We keep it here and flush at
+        // turn/end, so only the final reply goes out (no intermediate thinking).
         if (event.type === 'assistant/message' && isSurfaceEvent(event)) {
             const content = event.data.message.content;
-            // Intermediate per-step assistant/message events that carry NO new
-            // text (pure tool-call or empty "thinking draft") are not relayed.
-            // Any step WITH text is kept as the turn candidate; because steps are
-            // ordered, the last step that carries real text is the final reply.
             const text = extractText(content);
             const images = content.filter(
                 (block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image',
             );
             if (text !== '' || images.length > 0) {
-                this.pendingAssistant.set(sessionId, { text, images });
+                this.finalAssistant.set(sessionId, { text, images });
             }
             return;
         }
 
         if (event.type === 'turn/end') {
-            const toSend = this.pendingAssistant.get(sessionId);
+            const toSend = this.finalAssistant.get(sessionId);
             const chatsForTurn = this.sessionChats.get(sessionId) ?? [];
             if (toSend !== undefined && (toSend.text !== '' || toSend.images.length > 0)) {
-                void this.sendAssistant(sessionId, chatsForTurn, toSend.text, toSend.images)
-                    .then(() => this.clearReactionsForChats(chatsForTurn));
-            } else {
-                this.clearReactionsForChats(chatsForTurn);
+                void this.sendAssistant(sessionId, chatsForTurn, toSend.text, toSend.images);
             }
-            this.pendingAssistant.delete(sessionId);
-            // Release the chat association now that the turn is done.
-            this.sessionChats.delete(sessionId);
+            this.finalAssistant.delete(sessionId);
+            this.clearReactionsForChats(chatsForTurn);
+            // NOTE: sessionChats is deliberately NOT cleared here, so any async
+            // assistant output that arrives after the turn still has a chat to
+            // deliver to — otherwise replies could be silently dropped.
             return;
         }
     }
