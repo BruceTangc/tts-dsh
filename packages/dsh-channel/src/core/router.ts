@@ -209,12 +209,10 @@ export class ChannelRouter {
     private handleSessionEvent(sessionId: string, event: SessionEvent): void {
         if (event.type === 'assistant/message' && isSurfaceEvent(event)) {
             const content = event.data.message.content;
-            // An assistant/message that requests a tool call is INTERMEDIATE
-            // thinking ("我正在…" before a tool) — skip it. Only a pure-text
-            // step (no tool-call block) is the final answer. Keep the last such
-            // text/images for the turn and flush it at turn/end.
-            const hasToolCall = content.some((block) => (block as { type?: string }).type === 'tool-call');
-            if (hasToolCall) return;
+            // Intermediate per-step assistant/message events that carry NO new
+            // text (pure tool-call or empty "thinking draft") are not relayed.
+            // Any step WITH text is kept as the turn candidate; because steps are
+            // ordered, the last step that carries real text is the final reply.
             const text = extractText(content);
             const images = content.filter(
                 (block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image',
